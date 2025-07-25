@@ -3,18 +3,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-
+import pandas as pd
 
 class Config(object):
 
     """配置参数"""
     def __init__(self, dataset, embedding):
         self.model_name = 'TextCNN'
-        self.train_path = dataset + '/data/train.txt'                                # 训练集
-        self.dev_path = dataset + '/data/dev.txt'                                    # 验证集
-        self.test_path = dataset + '/data/test.txt'                                  # 测试集
-        self.class_list = [x.strip() for x in open(
-            dataset + '/data/class.txt', encoding='utf-8').readlines()]              # 类别名单
+        self.train_path = dataset + '/data/train.jsonl'                                # 训练集
+        self.dev_path = dataset + '/data/dev.jsonl'                                    # 验证集
+        self.test_path = dataset + '/data/test.jsonl'                                  # 测试集
+        self.class_list = pd.read_csv(
+            dataset + '/data/labels.csv',  # 文件路径
+            encoding='utf-8'  # 编码方式
+            )['label'].tolist()  # 类别名单
         self.vocab_path = dataset + '/data/vocab.pkl'                                # 词表
         self.save_path = dataset + '/saved_dict/' + self.model_name + '.ckpt'        # 模型训练结果
         self.log_path = dataset + '/log/' + self.model_name
@@ -28,8 +30,8 @@ class Config(object):
         self.num_classes = len(self.class_list)                         # 类别数
         self.n_vocab = 0                                                # 词表大小，在运行时赋值
         self.num_epochs = 20                                            # epoch数
-        self.batch_size = 128                                           # mini-batch大小
-        self.pad_size = 32                                              # 每句话处理成的长度(短填长切)
+        self.batch_size = 32                                           # mini-batch大小
+        self.pad_size = 150                                              # 每句话处理成的长度(短填长切)
         self.learning_rate = 1e-3                                       # 学习率
         self.embed = self.embedding_pretrained.size(1)\
             if self.embedding_pretrained is not None else 300           # 字向量维度
@@ -63,4 +65,5 @@ class Model(nn.Module):
         out = torch.cat([self.conv_and_pool(out, conv) for conv in self.convs], 1)
         out = self.dropout(out)
         out = self.fc(out)
+        #out = torch.sigmoid(out)  # 多标签分类需要sigmoid激活，如果损失函数使用的BCEWithLogitsLoss则不需要
         return out

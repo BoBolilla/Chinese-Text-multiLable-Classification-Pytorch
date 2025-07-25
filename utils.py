@@ -6,7 +6,8 @@ import pickle as pkl
 from tqdm import tqdm
 import time
 from datetime import timedelta
-
+import json
+from torch.utils.data import Dataset, DataLoader
 
 MAX_VOCAB_SIZE = 10000  # 词表长度限制
 UNK, PAD = '<UNK>', '<PAD>'  # 未知字，padding符号
@@ -19,7 +20,7 @@ def build_vocab(file_path, tokenizer, max_size, min_freq):
             lin = line.strip()
             if not lin:
                 continue
-            content = lin.split('\t')[0]
+            content = json.loads(lin).get("content", "")
             for word in tokenizer(content):
                 vocab_dic[word] = vocab_dic.get(word, 0) + 1
         vocab_list = sorted([_ for _ in vocab_dic.items() if _[1] >= min_freq], key=lambda x: x[1], reverse=True)[:max_size]
@@ -44,10 +45,12 @@ def build_dataset(config, ues_word):
         contents = []
         with open(path, 'r', encoding='UTF-8') as f:
             for line in tqdm(f):
-                lin = line.strip()
-                if not lin:
+                data = json.loads(line.strip())
+                if not data:
                     continue
-                content, label = lin.split('\t')
+                content = data['content']
+                labels = data['label']
+
                 words_line = []
                 token = tokenizer(content)
                 seq_len = len(token)
@@ -60,8 +63,14 @@ def build_dataset(config, ues_word):
                 # word to id
                 for word in token:
                     words_line.append(vocab.get(word, vocab.get(UNK)))
-                contents.append((words_line, int(label), seq_len))
-        return contents  # [([...], 0), ([...], 1), ...]
+
+                # 多标签处理：将标签转为multi-hot向量
+                label_vec = [0] * config.num_classes
+                for label in labels:
+                    if label in config.class_list:
+                        label_vec[config.class_list.index(label)] = 1
+                contents.append((words_line, label_vec, seq_len))
+        return contents
     train = load_dataset(config.train_path, config.pad_size)
     dev = load_dataset(config.dev_path, config.pad_size)
     test = load_dataset(config.test_path, config.pad_size)
@@ -81,7 +90,7 @@ class DatasetIterater(object):
 
     def _to_tensor(self, datas):
         x = torch.LongTensor([_[0] for _ in datas]).to(self.device)
-        y = torch.LongTensor([_[1] for _ in datas]).to(self.device)
+        y = torch.FloatTensor([_[1] for _ in datas]).to(self.device)
 
         # pad前的长度(超过pad_size的设为pad_size)
         seq_len = torch.LongTensor([_[2] for _ in datas]).to(self.device)

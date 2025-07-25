@@ -2,22 +2,23 @@
 import time
 import torch
 import numpy as np
-from train_eval import train, init_network
+from train_eval import train, init_network, test
 from importlib import import_module
 import argparse
 
 parser = argparse.ArgumentParser(description='Chinese Text Classification')
-parser.add_argument('--model', type=str, required=True, help='choose a model: TextCNN, TextRNN, FastText, TextRCNN, TextRNN_Att, DPCNN, Transformer')
-parser.add_argument('--embedding', default='pre_trained', type=str, help='random or pre_trained')
+# parser.add_argument('--model', type=str, required=True, help='choose a model: TextCNN, TextRNN, FastText, TextRCNN, TextRNN_Att, DPCNN, Transformer')
+parser.add_argument('--model', default='TextCNN', type=str, help='choose a model: TextCNN, TextRNN, FastText, TextRCNN, TextRNN_Att, DPCNN, Transformer')
+parser.add_argument('--embedding', default='ramdom', type=str, help='random or pre_trained')
 parser.add_argument('--word', default=False, type=bool, help='True for word, False for char')
 args = parser.parse_args()
 
 
 if __name__ == '__main__':
-    dataset = 'THUCNews'  # 数据集
+    dataset = 'data/CCNU'  # 数据集
 
     # 搜狗新闻:embedding_SougouNews.npz, 腾讯:embedding_Tencent.npz, 随机初始化:random
-    embedding = 'embedding_SougouNews.npz'
+    embedding = 'random'
     if args.embedding == 'random':
         embedding = 'random'
     model_name = args.model  # 'TextRCNN'  # TextCNN, TextRNN, FastText, TextRCNN, TextRNN_Att, DPCNN, Transformer
@@ -25,7 +26,8 @@ if __name__ == '__main__':
         from utils_fasttext import build_dataset, build_iterator, get_time_dif
         embedding = 'random'
     else:
-        from utils import build_dataset, build_iterator, get_time_dif
+        #from utils import build_dataset, build_iterator, get_time_dif
+        from dataloader import build_dataset, build_iterator, get_time_dif
 
     x = import_module('models.' + model_name)
     config = x.Config(dataset, embedding)

@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn import metrics
+from metrics import multi_class_evaluate
 import time
 from utils import get_time_dif
 from tensorboardX import SummaryWriter
@@ -30,6 +30,7 @@ def train(config, model, train_iter, dev_iter, test_iter):
     start_time = time.time()
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+    criterion = nn.BCEWithLogitsLoss()
 
     # 学习率指数衰减，每次epoch：学习率 = gamma * 学习率
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
@@ -42,32 +43,14 @@ def train(config, model, train_iter, dev_iter, test_iter):
         print('Epoch [{}/{}]'.format(epoch + 1, config.num_epochs))
         # scheduler.step() # 学习率衰减
         for i, (trains, labels) in enumerate(train_iter):
+            trains = [x.to(config.device) for x in trains]
+            labels = labels.to(config.device)
             outputs = model(trains)
             model.zero_grad()
-            loss = F.cross_entropy(outputs, labels)
+            loss = criterion(outputs, labels.float())
             loss.backward()
             optimizer.step()
-            if total_batch % 100 == 0:
-                # 每多少轮输出在训练集和验证集上的效果
-                true = labels.data.cpu()
-                predic = torch.max(outputs.data, 1)[1].cpu()
-                train_acc = metrics.accuracy_score(true, predic)
-                dev_acc, dev_loss = evaluate(config, model, dev_iter)
-                if dev_loss < dev_best_loss:
-                    dev_best_loss = dev_loss
-                    torch.save(model.state_dict(), config.save_path)
-                    improve = '*'
-                    last_improve = total_batch
-                else:
-                    improve = ''
-                time_dif = get_time_dif(start_time)
-                msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%},  Val Loss: {3:>5.2},  Val Acc: {4:>6.2%},  Time: {5} {6}'
-                print(msg.format(total_batch, loss.item(), train_acc, dev_loss, dev_acc, time_dif, improve))
-                writer.add_scalar("loss/train", loss.item(), total_batch)
-                writer.add_scalar("loss/dev", dev_loss, total_batch)
-                writer.add_scalar("acc/train", train_acc, total_batch)
-                writer.add_scalar("acc/dev", dev_acc, total_batch)
-                model.train()
+
             total_batch += 1
             if total_batch - last_improve > config.require_improvement:
                 # 验证集loss超过1000batch没下降，结束训练
@@ -76,6 +59,38 @@ def train(config, model, train_iter, dev_iter, test_iter):
                 break
         if flag:
             break
+
+        # 训练集top@1/2/3评估
+        model.eval()
+        train_metrics, train_loss = evaluate(config, model, train_iter, top_k=3)
+        dev_metrics, dev_loss = evaluate(config, model, dev_iter, top_k=3)
+        if dev_loss < dev_best_loss:
+            dev_best_loss = dev_loss
+            torch.save(model.state_dict(), config.save_path)
+            improve = '*'
+            # last_improve = total_batch
+        else:
+            improve = ''
+        time_dif = get_time_dif(start_time)
+        print(
+            f'Train Loss: {loss.item():.4f}, Val Loss: {dev_loss:.4f}, Time: {time_dif} {improve}')
+        for k in range(1, 4):
+            print(
+                f'  Train Accuracy@{k}: {train_metrics["acc"][k - 1]:.4f}, F1@{k}: {train_metrics["f1"][k - 1]:.4f}, Precision@{k}: {train_metrics["precision"][k - 1]:.4f}, Recall@{k}: {train_metrics["recall"][k - 1]:.4f}')
+            print(
+                f'  Val   Accuracy@{k}: {dev_metrics["acc"][k - 1]:.4f}, F1@{k}: {dev_metrics["f1"][k - 1]:.4f}, Precision@{k}: {dev_metrics["precision"][k - 1]:.4f}, Recall@{k}: {dev_metrics["recall"][k - 1]:.4f}')
+
+            writer.add_scalar(f"accuracy/train@{k}", train_metrics["acc"][k - 1], total_batch)
+            writer.add_scalar(f"accuracy/dev@{k}", dev_metrics["acc"][k - 1], total_batch)
+            writer.add_scalar(f"f1/train@{k}", train_metrics["f1"][k - 1], total_batch)
+            writer.add_scalar(f"f1/dev@{k}", dev_metrics["f1"][k - 1], total_batch)
+            writer.add_scalar(f"precision/train@{k}", train_metrics["precision"][k - 1], total_batch)
+            writer.add_scalar(f"precision/dev@{k}", dev_metrics["precision"][k - 1], total_batch)
+            writer.add_scalar(f"recall/train@{k}", train_metrics["recall"][k - 1], total_batch)
+            writer.add_scalar(f"recall/dev@{k}", dev_metrics["recall"][k - 1], total_batch)
+        writer.add_scalar("loss/train", loss.item(), total_batch)
+        writer.add_scalar("loss/dev", dev_loss, total_batch)
+        model.train()
     writer.close()
     test(config, model, test_iter)
 
@@ -85,35 +100,37 @@ def test(config, model, test_iter):
     model.load_state_dict(torch.load(config.save_path))
     model.eval()
     start_time = time.time()
-    test_acc, test_loss, test_report, test_confusion = evaluate(config, model, test_iter, test=True)
-    msg = 'Test Loss: {0:>5.2},  Test Acc: {1:>6.2%}'
-    print(msg.format(test_loss, test_acc))
-    print("Precision, Recall and F1-Score...")
-    print(test_report)
-    print("Confusion Matrix...")
-    print(test_confusion)
-    time_dif = get_time_dif(start_time)
-    print("Time usage:", time_dif)
+    test_metrics, test_loss = evaluate(config, model, test_iter, test=True, top_k=3)
+
+    print(f'Test Loss: {test_loss:.4f}')
+    for k in range(1, 4):
+        print(f'Test Top@{k}:')
+        print(f'  F1      : {test_metrics["f1"][k - 1]:.4f}')
+        print(f'  Precision: {test_metrics["precision"][k - 1]:.4f}')
+        print(f'  Recall   : {test_metrics["recall"][k - 1]:.4f}')
+        print(f'  Accuracy : {test_metrics["acc"][k - 1]:.4f}')
+
+    print("Time usage:", get_time_dif(start_time))
 
 
-def evaluate(config, model, data_iter, test=False):
+def evaluate(config, model, data_iter, test=False, top_k=3):
     model.eval()
     loss_total = 0
-    predict_all = np.array([], dtype=int)
-    labels_all = np.array([], dtype=int)
+    criterion = nn.BCEWithLogitsLoss()
+    labels_all = []
+    outputs_all = []
     with torch.no_grad():
         for texts, labels in data_iter:
+            texts = [x.to(config.device) for x in texts]
+            labels = labels.to(config.device)
             outputs = model(texts)
-            loss = F.cross_entropy(outputs, labels)
-            loss_total += loss
-            labels = labels.data.cpu().numpy()
-            predic = torch.max(outputs.data, 1)[1].cpu().numpy()
-            labels_all = np.append(labels_all, labels)
-            predict_all = np.append(predict_all, predic)
+            loss = criterion(outputs, labels.float())
+            loss_total += loss.item()
+            labels_all.append(labels.cpu().numpy())
+            outputs_all.append(torch.sigmoid(outputs).detach().cpu().numpy())
 
-    acc = metrics.accuracy_score(labels_all, predict_all)
-    if test:
-        report = metrics.classification_report(labels_all, predict_all, target_names=config.class_list, digits=4)
-        confusion = metrics.confusion_matrix(labels_all, predict_all)
-        return acc, loss_total / len(data_iter), report, confusion
-    return acc, loss_total / len(data_iter)
+    labels_all = np.concatenate(labels_all, axis=0)
+    outputs_all = np.concatenate(outputs_all, axis=0)
+    metrics_result = multi_class_evaluate(labels_all, outputs_all, max_k=top_k)
+
+    return metrics_result, loss_total / len(data_iter)
